@@ -105,13 +105,51 @@ class SourceVisitor implements AstVisitor {
     // Nest around the parentheses in case there are comments before or after
     // them.
     _writer.nestExpression();
+
     token(node.leftParenthesis);
 
+    // Corner case: If the first argument to a method is a block-bodied
+    // function, it looks bad if its parameter list gets wrapped to the next
+    // line. Bump the cost to try to avoid that. This prefers:
+    //
+    //     receiver
+    //         .method()
+    //         .chain((parameter, list) {
+    //       ...
+    //     });
+    //
+    // over:
+    //
+    //     receiver.method().chain(
+    //         (parameter, list) {
+    //       ...
+    //     });
+    // TODO(rnystrom): This causes a function expression's long parameter list
+    // to get split instead, like:
+    //
+    //     receiver.method((longParameter,
+    //         anotherParameter) {
+    //       ...
+    //     });
+    //
+    // Instead of bumping the cost, this should wrap a span around the "("
+    // before the argument list and the function's parameter list. That requires
+    // spans to not strictly be a stack, though, so would be a larger change
+    // than I want to do right now.
+    var cost = Cost.normal;
+    if (node.arguments.isNotEmpty) {
+      var firstArg = node.arguments.first;
+      if (firstArg is FunctionExpression &&
+          firstArg.body is BlockFunctionBody) {
+        cost = Cost.firstBlockArgument;
+      }
+    }
+
     // Allow splitting after "(".
-    var lastParam = zeroSplit();
+    var lastParam = zeroSplit(cost);
 
     // Try to keep the positional arguments together.
-    _writer.startSpan();
+    _writer.startSpan(Cost.positionalArguments);
 
     var i = 0;
     for (; i < node.arguments.length; i++) {
@@ -330,20 +368,39 @@ class SourceVisitor implements AstVisitor {
 
     _writer.indent();
 
-    // If there are multiple cascades, they always get their own line, even if
-    // they would fit.
-    if (node.cascadeSections.length > 1) {
-      newline();
-      visitNodes(node.cascadeSections, between: newline);
-    } else {
+    // If the cascade sections have consistent names they can be broken
+    // normally otherwise they always get their own line.
+    if (_allowInlineCascade(node.cascadeSections)) {
       _writer.startMultisplit();
       _writer.multisplit();
       visitNodes(node.cascadeSections, between: _writer.multisplit);
-
       _writer.endMultisplit();
+    } else {
+      newline();
+      visitNodes(node.cascadeSections, between: newline);
     }
 
     _writer.unindent();
+  }
+
+  /// Whether a cascade should be allowed to be inline as opposed to one
+  /// expression per line.
+  bool _allowInlineCascade(List<Expression> sections) {
+    if (sections.length < 2) return true;
+
+    var name;
+    // We could be more forgiving about what constitutes sections with
+    // consistent names but for now we require all sections to have the same
+    // method name.
+    for (var expression in sections) {      
+      if (expression is! MethodInvocation) return false;
+      if (name == null) {
+        name = expression.methodName.name;
+      } else if (name != expression.methodName.name) {
+        return false;
+      }
+    }   
+    return true;
   }
 
   visitCatchClause(CatchClause node) {
@@ -979,8 +1036,11 @@ class SourceVisitor implements AstVisitor {
   }
 
   visitListLiteral(ListLiteral node) {
+    // Corner case: Splitting inside a list looks bad if there's only one
+    // element, so make those more costly.
+    var cost = node.elements.length <= 1 ? Cost.singleElementList : Cost.normal;
     _visitCollectionLiteral(
-        node, node.leftBracket, node.elements, node.rightBracket);
+        node, node.leftBracket, node.elements, node.rightBracket, cost);
   }
 
   visitMapLiteral(MapLiteral node) {
@@ -1542,11 +1602,11 @@ class SourceVisitor implements AstVisitor {
   /// Visits the collection literal [node] whose body starts with [leftBracket],
   /// ends with [rightBracket] and contains [elements].
   void _visitCollectionLiteral(TypedLiteral node, Token leftBracket,
-      Iterable<AstNode> elements, Token rightBracket) {
+      Iterable<AstNode> elements, Token rightBracket, [int cost]) {
     modifier(node.constKeyword);
     visit(node.typeArguments);
 
-    _startBody(leftBracket);
+    _startBody(leftBracket, cost: cost);
 
     // Each list element takes at least 3 characters (one character for the
     // element, one for the comma, one for the space), so force it to split if
@@ -1649,11 +1709,11 @@ class SourceVisitor implements AstVisitor {
   ///
   /// If [space] is `true`, then the initial multisplit will use a space if not
   /// split.
-  void _startBody(Token leftBracket, {bool space: false}) {
+  void _startBody(Token leftBracket, {int cost, bool space: false}) {
     token(leftBracket);
 
     // Indent the body.
-    _writer.startMultisplit();
+    _writer.startMultisplit(cost: cost);
     _writer.indent();
 
     // Split after the bracket.
@@ -1746,7 +1806,7 @@ class SourceVisitor implements AstVisitor {
   /// Writes a split that is the empty string when unsplit.
   ///
   /// Returns the newly created [SplitParam].
-  SplitParam zeroSplit() => _writer.writeSplit();
+  SplitParam zeroSplit([int cost]) => _writer.writeSplit(cost: cost);
 
   /// Emit [token], along with any comments and formatted whitespace that comes
   /// before it.

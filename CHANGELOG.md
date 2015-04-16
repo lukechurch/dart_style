@@ -1,7 +1,18 @@
+# 0.1.8-dev
+
+* Update to latest args.
+* Allow cascades with repeated method names to be one line.
+
 # 0.1.7
 
 * Update to latest analyzer (#177).
 * Don't discard annotations on initializing formals (#197).
+* Optimize formatting deeply nested expressions (#108).
+* Discard unused nesting level to improve performance (#108).
+* Discard unused spans to improve performance (#108).
+* Harden splits that containg too much nesting (#108).
+* Try to avoid splitting single-element lists (#211).
+* Avoid splitting when the first argument is a function expression (#211). 
 
 # 0.1.6
 

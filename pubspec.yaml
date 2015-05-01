@@ -7,6 +7,7 @@ dependencies:
   analyzer:
     git:
       url: git://github.com/lukechurch/dart-analyzer-temp-working.git
+      ref: v1_10_0
   args: '>=0.12.1 <0.14.0'
   path: '>=1.0.0 <2.0.0'
   source_span: '>=1.0.0 <2.0.0'
